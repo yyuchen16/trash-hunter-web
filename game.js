@@ -15,6 +15,39 @@ const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 ctx.imageSmoothingEnabled = true;
 
+const loginNameInput = document.createElement("input");
+const loginPasswordInput = document.createElement("input");
+const loginInputRects = {
+  name: { x: 70, y: 330, w: W - 140, h: 48 },
+  password: { x: 70, y: 412, w: W - 140, h: 48 },
+};
+
+function setupLoginInput(input, type, label) {
+  input.type = type;
+  input.setAttribute("aria-label", label);
+  input.autocapitalize = "none";
+  input.autocomplete = type === "password" ? "current-password" : "username";
+  input.spellcheck = false;
+  Object.assign(input.style, {
+    position: "fixed",
+    zIndex: "10",
+    opacity: "0.01",
+    border: "0",
+    padding: "0",
+    margin: "0",
+    background: "transparent",
+    color: "transparent",
+    caretColor: "transparent",
+    outline: "none",
+    fontSize: "16px",
+    display: "none",
+  });
+  document.body.appendChild(input);
+}
+
+setupLoginInput(loginNameInput, "text", "name");
+setupLoginInput(loginPasswordInput, "password", "password");
+
 const assetPaths = {
   bg: "assets/backgroundbeach.jpg",
   storeBg: "assets/conveniencestore.jpg",
@@ -138,6 +171,21 @@ let tutorialPage = 0;
 let settingsOpen = false;
 let rankingRecords = [];
 let rankingMessage = "";
+
+loginNameInput.addEventListener("focus", () => {
+  loginFocus = "name";
+});
+loginPasswordInput.addEventListener("focus", () => {
+  loginFocus = "password";
+});
+loginNameInput.addEventListener("input", () => {
+  loginName = loginNameInput.value.slice(0, 20);
+  if (loginNameInput.value !== loginName) loginNameInput.value = loginName;
+});
+loginPasswordInput.addEventListener("input", () => {
+  loginPassword = loginPasswordInput.value.slice(0, 32);
+  if (loginPasswordInput.value !== loginPassword) loginPasswordInput.value = loginPassword;
+});
 
 const audio = {
   bgm: new Audio("music/disco.mp3"),
@@ -269,6 +317,45 @@ function drawImageFit(img, x, y, w, h) {
   else roundRect(x, y, w, h, 6, "#ddd", "#555", 2);
 }
 
+function syncLoginDomInputs() {
+  if (loginNameInput.value !== loginName) loginNameInput.value = loginName;
+  if (loginPasswordInput.value !== loginPassword) loginPasswordInput.value = loginPassword;
+}
+
+function setLoginInputCss(input, rect) {
+  const canvasRect = canvas.getBoundingClientRect();
+  const scaleX = canvasRect.width / W;
+  const scaleY = canvasRect.height / H;
+  input.style.left = `${canvasRect.left + rect.x * scaleX}px`;
+  input.style.top = `${canvasRect.top + rect.y * scaleY}px`;
+  input.style.width = `${rect.w * scaleX}px`;
+  input.style.height = `${rect.h * scaleY}px`;
+}
+
+function updateLoginDomInputs() {
+  const show = game.state === "login" && !settingsOpen;
+  for (const input of [loginNameInput, loginPasswordInput]) {
+    input.style.display = show ? "block" : "none";
+  }
+  if (!show) return;
+  syncLoginDomInputs();
+  setLoginInputCss(loginNameInput, loginInputRects.name);
+  setLoginInputCss(loginPasswordInput, loginInputRects.password);
+}
+
+function focusLoginDomInput(field) {
+  loginFocus = field;
+  syncLoginDomInputs();
+  const input = field === "name" ? loginNameInput : loginPasswordInput;
+  input.focus({ preventScroll: true });
+  input.setSelectionRange(input.value.length, input.value.length);
+}
+
+function blurLoginDomInputs() {
+  loginNameInput.blur();
+  loginPasswordInput.blur();
+}
+
 function unlockAudio() {
   if (audioReady) return;
   audioReady = true;
@@ -373,6 +460,8 @@ function finishAuth(name) {
   loginPassword = "";
   localStorage.setItem("trashHunterPlayerName", playerName);
   authMessage = "";
+  syncLoginDomInputs();
+  blurLoginDomInputs();
   game.state = "map";
 }
 
@@ -1294,6 +1383,7 @@ function loop(time) {
   drawGear();
   if (game.tutorialActive) drawTutorial();
   if (settingsOpen) drawSettings();
+  updateLoginDomInputs();
   requestAnimationFrame(loop);
 }
 
@@ -1379,14 +1469,15 @@ canvas.addEventListener("click", async (event) => {
 
   if (game.state === "login") {
     if (pointInRect(mouse, { x: 70, y: 330, w: W - 140, h: 48 })) {
-      loginFocus = "name";
+      focusLoginDomInput("name");
       return;
     }
     if (pointInRect(mouse, { x: 70, y: 412, w: W - 140, h: 48 })) {
-      loginFocus = "password";
+      focusLoginDomInput("password");
       return;
     }
     if (pointInRect(mouse, { x: 125, y: 515, w: W - 250, h: 52 })) {
+      blurLoginDomInputs();
       try {
         const loggedIn = authMode === "login"
           ? await loginPlayer(loginName, loginPassword)
@@ -1398,7 +1489,9 @@ canvas.addEventListener("click", async (event) => {
     } else if (pointInRect(mouse, { x: 125, y: 578, w: W - 250, h: 42 })) {
       authMode = authMode === "login" ? "register" : "login";
       authMessage = "";
+      focusLoginDomInput(loginFocus);
     } else if (pointInRect(mouse, { x: 125, y: 630, w: W - 250, h: 42 })) {
+      blurLoginDomInputs();
       finishAuth("Player");
     }
     return;
@@ -1488,13 +1581,15 @@ canvas.addEventListener("click", async (event) => {
 
 window.addEventListener("keydown", async (event) => {
   if (game.state === "login") {
+    const fromLoginInput = event.target === loginNameInput || event.target === loginPasswordInput;
     if (event.key === "Tab") {
       event.preventDefault();
-      loginFocus = loginFocus === "name" ? "password" : "name";
+      focusLoginDomInput(loginFocus === "name" ? "password" : "name");
       return;
     }
     if (event.key === "Enter") {
       event.preventDefault();
+      blurLoginDomInputs();
       try {
         const loggedIn = authMode === "login"
           ? await loginPlayer(loginName, loginPassword)
@@ -1505,16 +1600,19 @@ window.addEventListener("keydown", async (event) => {
       }
       return;
     }
+    if (fromLoginInput) return;
     if (event.key === "Backspace") {
       event.preventDefault();
       if (loginFocus === "name") loginName = loginName.slice(0, -1);
       else loginPassword = loginPassword.slice(0, -1);
+      syncLoginDomInputs();
       return;
     }
     if (event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
       event.preventDefault();
       if (loginFocus === "name") loginName = (loginName + event.key).slice(0, 20);
       else loginPassword = (loginPassword + event.key).slice(0, 32);
+      syncLoginDomInputs();
       return;
     }
   }
