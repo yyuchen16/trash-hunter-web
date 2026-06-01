@@ -8,6 +8,8 @@ const STACK_CAPACITY = 7;
 const SHUFFLE_COST = 30;
 const LEVEL3_TIME_LIMIT_MS = 60000;
 const CITY_TIME_LIMIT_MS = 90000;
+const LEVEL_CLEAR_MS = 1400;
+const TIME_BONUS_POINTS_PER_SECOND = 5;
 const SUPABASE_URL = "https://ujzzlmwuwywvhvczcuvo.supabase.co/rest/v1";
 const SUPABASE_KEY = "sb_publishable_69O9uk7cWBD4JW5RaZMKNQ_SZRVCguM";
 
@@ -60,6 +62,8 @@ const assetPaths = {
   trashcar: "assets/trashcar.png",
   gear: "assets/settings_gear.png",
   restart: "assets/restarttrash.png",
+  badEarth: "assets/bad_earth.jpg",
+  goodEarth: "assets/good_earth.jpg",
   win: ["assets/win1t.png", "assets/win2t.png", "assets/win3t.png"],
   lose: ["assets/lose1t.png", "assets/lose2t.png", "assets/lose3t.png", "assets/lose4t.png"],
   player: ["assets/girl1.png", "assets/girl2.png", "assets/girl3.png"],
@@ -228,6 +232,20 @@ const game = {
   leaderboardStage: "",
   leaderboardRecords: [],
   leaderboardMessage: "",
+  nextAfterLeaderboard: "map",
+  levelClearStage: "",
+  levelClearNextAction: "leaderboard",
+  levelClearTimeLeftMs: 0,
+  levelClearTimer: 0,
+  timeBonusSeconds: 0,
+  timeBonusTotal: 0,
+  timeBonusAdded: 0,
+  timeBonusStartScore: 0,
+  timeBonusElapsed: 0,
+  timeBonusDuration: 1200,
+  timeBonusStage: "",
+  timeBonusNextAction: "map",
+  endSceneTimer: 0,
   scoreSubmitted: false,
   tutorialActive: false,
 };
@@ -263,6 +281,8 @@ async function loadAssets() {
     loadImage("trashcar", assetPaths.trashcar),
     loadImage("gear", assetPaths.gear),
     loadImage("restart", assetPaths.restart),
+    loadImage("badEarth", assetPaths.badEarth),
+    loadImage("goodEarth", assetPaths.goodEarth),
     ...assetPaths.win.map((p, i) => loadImage(`win${i}`, p)),
     ...assetPaths.lose.map((p, i) => loadImage(`lose${i}`, p)),
     ...assetPaths.player.map((p, i) => loadImage(`player${i}`, p)),
@@ -391,7 +411,7 @@ function updateMusicForState() {
 
   if (game.state === "map" || game.state === "start") {
     playMusic("map");
-  } else if (game.state === "play" || game.state === "end") {
+  } else if (game.state === "play" || game.state === "end" || game.state === "level_clear" || game.state === "time_bonus") {
     playMusic("bgm");
   } else {
     stopMusic();
@@ -640,6 +660,19 @@ function startLevel(mapLevel = 1) {
   game.leaderboardStage = "";
   game.leaderboardRecords = [];
   game.leaderboardMessage = "";
+  game.nextAfterLeaderboard = "map";
+  game.levelClearStage = "";
+  game.levelClearNextAction = "leaderboard";
+  game.levelClearTimeLeftMs = 0;
+  game.levelClearTimer = 0;
+  game.timeBonusSeconds = 0;
+  game.timeBonusTotal = 0;
+  game.timeBonusAdded = 0;
+  game.timeBonusStartScore = 0;
+  game.timeBonusElapsed = 0;
+  game.timeBonusStage = "";
+  game.timeBonusNextAction = "map";
+  game.endSceneTimer = 0;
   game.scoreSubmitted = false;
   if (mapLevel === 1) {
     game.tutorialActive = true;
@@ -845,24 +878,103 @@ function checkClearOrLose() {
 }
 
 function finishLevel(result) {
-  if (result === "win") {
-    game.cleared.add(game.selectedMapLevel);
-    const next = currentMapLevel();
-    const nextPos = levelMapPos[next] || levelMapPos[4];
-    game.mapPlayerX = nextPos.x;
-    game.mapPlayerY = nextPos.y - 28;
-  }
   game.endResult = result;
   if (result === "win" && !game.scoreSubmitted) {
-    game.scoreSubmitted = true;
-    game.leaderboardStage = stageName();
-    game.leaderboardRecords = [];
-    game.leaderboardMessage = "Saving score...";
-    game.state = "leaderboard";
-    submitScore(stageName(), game.score);
+    const timeLeftMs = game.selectedMapLevel === 2
+      ? game.level3TimeLeftMs
+      : game.selectedMapLevel === 4
+        ? game.cityTimeLeftMs
+        : 0;
+    startLevelClear(stageName(), timeLeftMs > 0 ? "time_bonus" : "leaderboard", timeLeftMs);
   } else {
     game.state = "end";
   }
+}
+
+function startLevelClear(stage, nextAction, timeLeftMs = 0) {
+  game.levelClearStage = stage;
+  game.levelClearNextAction = nextAction;
+  game.levelClearTimeLeftMs = timeLeftMs;
+  game.levelClearTimer = 0;
+  game.state = "level_clear";
+}
+
+function updateLevelClear(dt) {
+  game.levelClearTimer += dt;
+  if (game.levelClearTimer < LEVEL_CLEAR_MS) return;
+
+  const stage = game.levelClearStage;
+  const nextAction = game.levelClearNextAction;
+  const timeLeftMs = game.levelClearTimeLeftMs;
+  game.levelClearStage = "";
+  game.levelClearNextAction = "leaderboard";
+  game.levelClearTimeLeftMs = 0;
+  game.levelClearTimer = 0;
+
+  if (nextAction === "time_bonus") {
+    startTimeBonus(stage, game.selectedMapLevel === 4 ? "finale" : "map", timeLeftMs);
+  } else {
+    showLeaderboard(stage, "map");
+  }
+}
+
+function startTimeBonus(stage, nextAction, timeLeftMs) {
+  game.timeBonusSeconds = Math.max(0, Math.floor(timeLeftMs / 1000));
+  game.timeBonusTotal = game.timeBonusSeconds * TIME_BONUS_POINTS_PER_SECOND;
+  game.timeBonusAdded = 0;
+  game.timeBonusStartScore = game.score;
+  game.timeBonusElapsed = 0;
+  game.timeBonusDuration = Math.max(900, Math.min(1800, game.timeBonusSeconds * 45));
+  game.timeBonusStage = stage;
+  game.timeBonusNextAction = nextAction;
+  game.state = "time_bonus";
+}
+
+function updateTimeBonus(dt) {
+  if (game.timeBonusTotal <= 0) {
+    showLeaderboard(game.timeBonusStage, game.timeBonusNextAction);
+    return;
+  }
+
+  game.timeBonusElapsed += dt;
+  const linear = Math.min(1, game.timeBonusElapsed / game.timeBonusDuration);
+  const eased = 1 - Math.pow(1 - linear, 3);
+  game.timeBonusAdded = Math.min(game.timeBonusTotal, Math.floor(game.timeBonusTotal * eased));
+  game.score = game.timeBonusStartScore + game.timeBonusAdded;
+
+  if (game.timeBonusAdded >= game.timeBonusTotal) {
+    game.score = game.timeBonusStartScore + game.timeBonusTotal;
+    showLeaderboard(game.timeBonusStage, game.timeBonusNextAction);
+  }
+}
+
+function showLeaderboard(stage, nextAction) {
+  game.scoreSubmitted = true;
+  game.leaderboardStage = stage;
+  game.leaderboardRecords = [];
+  game.leaderboardMessage = "Saving score...";
+  game.nextAfterLeaderboard = nextAction;
+  game.state = "leaderboard";
+  submitScore(stage, game.score);
+}
+
+function continueAfterLeaderboard() {
+  game.cleared.add(game.selectedMapLevel);
+  const next = currentMapLevel();
+  const nextPos = levelMapPos[next] || levelMapPos[4];
+  game.mapPlayerX = nextPos.x;
+  game.mapPlayerY = nextPos.y - 28;
+
+  if (game.nextAfterLeaderboard === "finale") {
+    game.endResult = "win";
+    game.endSceneTimer = 0;
+    game.state = "end";
+  } else {
+    game.mapMessage = "Level Clear!";
+    game.mapMessageUntil = performance.now() + 2000;
+    game.state = "map";
+  }
+  game.nextAfterLeaderboard = "map";
 }
 
 function drawStart(time) {
@@ -1222,13 +1334,82 @@ function line(x1, y1, x2, y2) {
 }
 
 function drawEnd(time) {
-  drawImageFit(images.bg, 0, 0, W, H);
-  const frames = game.endResult === "win" ? assetPaths.win : assetPaths.lose;
-  const key = game.endResult === "win" ? `win${Math.floor(time / 140) % frames.length}` : `lose${Math.floor(time / 140) % frames.length}`;
-  drawImageFit(images[key], 25, 70, 400, 400);
-  drawPixel(`SCORE ${game.score}`, 28, W / 2, 465, "#223");
-  drawLeaderboardPanel();
+  if (game.endResult === "win") {
+    drawCleanEarthEnding();
+    drawPixel(`SCORE ${game.score}`, 26, W / 2, H - 184, "#223");
+  } else {
+    drawImageFit(images.bg, 0, 0, W, H);
+    const key = `lose${Math.floor(time / 140) % assetPaths.lose.length}`;
+    drawImageFit(images[key], 25, 70, 400, 400);
+    drawPixel(`SCORE ${game.score}`, 28, W / 2, 465, "#223");
+  }
   drawImageCentered(images.restart, W / 2, H - 110, 310, 310);
+}
+
+function drawCleanEarthEnding() {
+  const p = Math.min(1, game.endSceneTimer / 2600);
+  const cleanP = smoothstep(Math.max(0, Math.min(1, (p - 0.18) / 0.62)));
+  drawImageFit(images.badEarth || images.bg, 0, 0, W, H);
+  ctx.save();
+  ctx.globalAlpha = cleanP;
+  drawImageFit(images.goodEarth || images.bg, 0, 0, W, H);
+  ctx.restore();
+
+  const sweepX = -120 + (W + 240) * p;
+  ctx.save();
+  ctx.globalAlpha = 0.34;
+  ctx.fillStyle = "#fffab9";
+  ctx.beginPath();
+  ctx.ellipse(sweepX, H / 2, 135, 325, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function smoothstep(t) {
+  return t * t * (3 - 2 * t);
+}
+
+function drawLevelClearScreen() {
+  drawImageFit(currentLevelBg(), 0, 0, W, H);
+  ctx.fillStyle = "rgba(0,0,0,.47)";
+  ctx.fillRect(0, 0, W, H);
+  roundRect(36, 245, W - 72, 260, 16, "#fff8e0", "#463723", 4);
+
+  const p = Math.min(1, game.levelClearTimer / Math.max(1, LEVEL_CLEAR_MS));
+  const pulse = 1 + Math.sin(p * Math.PI) * 0.08;
+  drawStar(W / 2, 307, 42 * pulse, 20 * pulse);
+  drawPixel("LEVEL CLEAR", 34, W / 2, 377, "#463723");
+  drawText(game.levelClearStage, 22, W / 2, 419, "#463723");
+  drawPixel(`SCORE ${game.score}`, 24, W / 2, 461, "#285a37");
+}
+
+function drawStar(cx, cy, outerR, innerR) {
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const angle = -Math.PI / 2 + i * Math.PI / 5;
+    const r = i % 2 === 0 ? outerR : innerR;
+    const x = cx + Math.cos(angle) * r;
+    const y = cy + Math.sin(angle) * r;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fillStyle = "#ffd241";
+  ctx.fill();
+  ctx.strokeStyle = "#5f4623";
+  ctx.lineWidth = 3;
+  ctx.stroke();
+}
+
+function drawTimeBonusScreen() {
+  drawImageFit(currentLevelBg(), 0, 0, W, H);
+  ctx.fillStyle = "rgba(0,0,0,.58)";
+  ctx.fillRect(0, 0, W, H);
+  roundRect(38, 220, W - 76, 300, 14, "#fff8e0", "#463723", 4);
+  drawText("剩餘時間獎勵", 28, W / 2, 268, "#463723", "center", true);
+  drawPixel(`${game.timeBonusSeconds} SEC  x  ${TIME_BONUS_POINTS_PER_SECOND}`, 28, W / 2, 332, "#285a37");
+  drawPixel(`+${game.timeBonusAdded}`, 42, W / 2, 398, "#be4b2d");
+  drawPixel(`SCORE ${game.score}`, 26, W / 2, 458, "#463723");
 }
 
 function drawLeaderboardPanel() {
@@ -1316,6 +1497,20 @@ function drawSettings() {
 function update(dt) {
   if (game.message && performance.now() >= game.messageUntil) game.message = "";
   updateMapPlayer(dt);
+
+  if (game.state === "level_clear") {
+    updateLevelClear(dt);
+    return;
+  }
+  if (game.state === "time_bonus") {
+    updateTimeBonus(dt);
+    return;
+  }
+  if (game.state === "end" && game.endResult === "win") {
+    game.endSceneTimer += dt;
+    return;
+  }
+
   if (game.state !== "play" || game.askingCategory) return;
 
   if (game.level === 3) {
@@ -1376,6 +1571,8 @@ function loop(time) {
   else if (game.state === "map") drawMap(time);
   else if (game.state === "rankings") drawRankings();
   else if (game.state === "play") drawPlay(time);
+  else if (game.state === "level_clear") drawLevelClearScreen();
+  else if (game.state === "time_bonus") drawTimeBonusScreen();
   else if (game.state === "leaderboard") drawLeaderboardScreen();
   else if (game.state === "end") drawEnd(time);
 
@@ -1528,7 +1725,7 @@ canvas.addEventListener("click", async (event) => {
   }
 
   if (game.state === "leaderboard") {
-    if (pointInRect(mouse, { x: W / 2 - 95, y: 616, w: 190, h: 48 })) game.state = "map";
+    if (pointInRect(mouse, { x: W / 2 - 95, y: 616, w: 190, h: 48 })) continueAfterLeaderboard();
     return;
   }
 
