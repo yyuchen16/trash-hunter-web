@@ -474,7 +474,7 @@ async function loginPlayer(name, password) {
   const rows = await supabaseFetch(`/players?${query.toString()}`);
   if (!rows.length) throw new Error("找不到玩家，請先註冊");
   const passwordHash = await sha256(password);
-  if (rows[0].password_hash !== passwordHash && rows[0].password_hash !== "web-player") {
+  if (rows[0].password_hash !== passwordHash) {
     throw new Error("密碼錯誤");
   }
   try {
@@ -560,10 +560,17 @@ async function supabaseFetch(path, options = {}) {
 }
 
 async function ensureSupabasePlayer(name) {
+  const query = new URLSearchParams({
+    select: "player_name",
+    player_name: `eq.${name}`,
+    limit: "1",
+  });
+  const rows = await supabaseFetch(`/players?${query.toString()}`);
+  if (rows.length) return;
+
   const passwordHash = await sha256("web-player");
-  await supabaseFetch("/players?on_conflict=player_name", {
+  await supabaseFetch("/players", {
     method: "POST",
-    headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
     body: JSON.stringify({
       player_name: name,
       password_hash: passwordHash,
