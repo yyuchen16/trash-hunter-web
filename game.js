@@ -454,6 +454,12 @@ async function registerPlayer(name, password) {
       password_hash: passwordHash,
     }),
   });
+  try {
+    await saveProgress(cleanName, 1);
+  } catch (error) {
+    console.warn("Progress could not be created yet:", error);
+  }
+  applyProgress(1);
   return cleanName;
 }
 
@@ -471,7 +477,48 @@ async function loginPlayer(name, password) {
   if (rows[0].password_hash !== passwordHash && rows[0].password_hash !== "web-player") {
     throw new Error("密碼錯誤");
   }
+  try {
+    const maxMapLevel = await loadProgress(cleanName);
+    applyProgress(maxMapLevel);
+  } catch (error) {
+    console.warn("Progress could not be loaded yet:", error);
+    applyProgress(1);
+  }
   return cleanName;
+}
+
+async function loadProgress(name) {
+  const query = new URLSearchParams({
+    select: "max_map_level",
+    player_name: `eq.${name}`,
+    limit: "1",
+  });
+  const rows = await supabaseFetch(`/user_progress?${query.toString()}`);
+  return rows.length ? Number(rows[0].max_map_level) || 1 : 1;
+}
+
+async function saveProgress(name, maxMapLevel) {
+  if (!name || name === "Player") return;
+  await supabaseFetch("/user_progress?on_conflict=player_name", {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify({
+      player_name: name,
+      max_map_level: Math.max(1, Math.min(5, maxMapLevel)),
+    }),
+  });
+}
+
+function applyProgress(maxMapLevel) {
+  const safeMax = Math.max(1, Math.min(5, Number(maxMapLevel) || 1));
+  game.cleared = new Set();
+  for (let level = 1; level < safeMax; level += 1) {
+    game.cleared.add(level);
+  }
+  const next = currentMapLevel();
+  const nextPos = levelMapPos[next] || levelMapPos[4];
+  game.mapPlayerX = nextPos.x;
+  game.mapPlayerY = nextPos.y - 28;
 }
 
 function finishAuth(name) {
@@ -632,7 +679,7 @@ function currentMapLevel() {
   for (const n of [1, 2, 3, 4]) {
     if (!game.cleared.has(n)) return n;
   }
-  return 4;
+  return 5;
 }
 
 function startLevel(mapLevel = 1) {
@@ -958,8 +1005,13 @@ function showLeaderboard(stage, nextAction) {
   submitScore(stage, game.score);
 }
 
-function continueAfterLeaderboard() {
+async function continueAfterLeaderboard() {
   game.cleared.add(game.selectedMapLevel);
+  try {
+    await saveProgress(playerName, Math.min(game.selectedMapLevel + 1, 5));
+  } catch (error) {
+    console.warn("Progress could not be saved yet:", error);
+  }
   const next = currentMapLevel();
   const nextPos = levelMapPos[next] || levelMapPos[4];
   game.mapPlayerX = nextPos.x;
@@ -1725,7 +1777,7 @@ canvas.addEventListener("click", async (event) => {
   }
 
   if (game.state === "leaderboard") {
-    if (pointInRect(mouse, { x: W / 2 - 95, y: 616, w: 190, h: 48 })) continueAfterLeaderboard();
+    if (pointInRect(mouse, { x: W / 2 - 95, y: 616, w: 190, h: 48 })) await continueAfterLeaderboard();
     return;
   }
 
